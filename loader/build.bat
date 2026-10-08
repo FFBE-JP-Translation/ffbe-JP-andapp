@@ -28,3 +28,5 @@ goto done
 :done
 echo.
 echo Place winmm.dll + andapp_loader.ini next to FF_EXVIUS.exe.
+
+pause

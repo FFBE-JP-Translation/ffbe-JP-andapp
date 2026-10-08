@@ -90,9 +90,16 @@ def read_frame(s):
 # ---- helper discovery / launch ----------------------------------------------
 def helper_running():
     try:
-        out = subprocess.check_output(["tasklist", "/fi", "imagename eq andapphelper.exe"],
-                                      text=True, stderr=subprocess.DEVNULL)
-        return "andapphelper.exe" in out.lower()
+        out = subprocess.check_output(
+            ["tasklist"],
+            text=True,
+            stderr=subprocess.DEVNULL
+        ).lower()
+
+        return (
+            "andapphelper.exe" in out or
+            "andappnexthelper.exe" in out
+        )
     except Exception:
         return False
 
@@ -102,7 +109,7 @@ def ensure_helper(cfg_path):
         return
     exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "AndApp", "AndAppNext.exe")
     if not os.path.exists(exe):
-        sys.exit("andapphelper not running and AndAppNext.exe not found at %s" % exe)
+        sys.exit("AndAppHelper not running and AndAppNext.exe not found at %s" % exe)
     print("Launching", exe, "...")
     subprocess.Popen([exe])
     for _ in range(120):  # up to ~60s
@@ -117,7 +124,6 @@ def ensure_helper(cfg_path):
 def read_command_port(cfg_path):
     cfg = json.load(open(cfg_path, encoding="utf-8"))
     return int(cfg["standard.tcp.command.ipv4.port"])
-
 
 # ---- session ----------------------------------------------------------------
 def capture(port, client_id, api_level, sdk_version, payload_id):
