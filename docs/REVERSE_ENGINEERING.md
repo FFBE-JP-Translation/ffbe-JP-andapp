@@ -483,3 +483,65 @@ should match what `andapp_mitm.py` captured from the helper on PC (§5a/§5b). I
 so, a native-Mobage login (future `tools/mobage_login.py`, fed the
 consumer key/secret + endpoints the capture reveals) can produce a Sakasho
 session for the PC build without AndApp in the loop at all.
+
+### §7a. Observed FFRK Android → Mobage/Sakasho login (decoded capture)
+
+A live MITM of the Android client (`jp.mbga.a12019103.lite`, SP SDK `1.15.0`,
+`game_id 12019103`) captured the complete session bootstrap. It is **not** the
+classic 3-legged webform every call — it is Mobage's **SP SDK** protocol: a
+WebView does the one-time Mobage-ID login, after which the native SDK holds a
+persistent user access token and signs API calls with OAuth 1.0a HMAC-SHA1.
+All values below are placeholders; the real ones are per-user secrets.
+
+**Phase 1 — SDK auth check (WebView, `ssl.sp.mbga.jp`).**
+`GET /_sdk_chk_and_auth?...&oauth_consumer_key=sdk_app_id:12019103&
+oauth_signature_method=HMAC-SHA1&oauth_token=&oauth_version=1.0&on_launch=&
+on_resume=` — **2-legged** (empty `oauth_token`, signing key
+`<consumer_secret>&`). When the device already has a Mobage session the HTML
+response redirects to `ngcore:///session_callback#...` whose `credentialsInfo`
+is URL-encoded JSON:
+```
+{"error":null,"credentials":{
+   "oauth_token":"sdk_client_id:<40-hex>",
+   "oauth_token_secret":"<32-char>"}}
+```
+plus `logged_in=1`, `user_id=<digits>`, `user_id_hash=<40-hex>`. These
+**credentials are the persistent per-user access token** — the Mobage analogue
+of AndApp's `passphrase`. (Pre-login, the same endpoint returns
+`...&please_login=1` and the `_lg` login page instead.)
+
+**Phase 2 — Sakasho temporary credential (`dff.sp.mbga.jp`).**
+`POST /dff/_api_get_temporary_credential` (auth by the `http_session_sid`
+cookie, `android-async-http` UA) → `{"success":true,
+"oauth_token":"temporary_credential:<40-hex>","csrf_token":"<...>"}`.
+
+**Phase 3 — authorize the temp credential (`ssl.sp.mbga-platform.jp`).**
+`POST /social/api/jsonrpc/v2.03`, `{"jsonrpc":"2.0",
+"method":"accesstoken.authorizeToken","params":{"token":"temporary_credential:<40-hex>"}}`.
+**3-legged** OAuth in the `Authorization: OAuth ...` header: `oauth_consumer_key=
+sdk_app_id:12019103`, `oauth_token=sdk_client_id:<40-hex>` (from phase 1),
+`oauth_body_hash=base64(sha1(body))`, signing key
+`<consumer_secret>&<oauth_token_secret>`, plus `xoauth_requestor_id=<user_id>`.
+→ `{"result":{"verifier":"<64-hex>","token":"temporary_credential:<40-hex>"}}`.
+(The SDK also calls `remotenotification.updateToken` here for FCM — not needed
+for login.)
+
+**Phase 4 — create the Sakasho game session (`dff.sp.mbga.jp`).**
+`POST /dff/_api_create_session`, form body
+`verifier=<64-hex>&oauth_token=temporary_credential:<40-hex>` → the player
+profile `{"success":true,"nickname":...,"id":"<user_id>",...}` and
+`Set-Cookie: http_session_sid=<new>` — the authenticated **game session**. The
+rest of the client (`/dff/splash`, `/dff/`, `/dff/tutorial/`) rides that cookie.
+
+**Consequences.**
+* The whole flow is reproducible headlessly with: the **consumer secret** for
+  `sdk_app_id:12019103` (baked into the native lib — not extracted here), the
+  user's phase-1 `oauth_token`/`oauth_token_secret` (captured once via the
+  WebView login), and a starting `http_session_sid`. `tools/mobage_login.py` is
+  the signer + phase-2→4 driver skeleton for exactly this.
+* Cert pinning mostly affects the WebView login *form*; the native
+  `dff.sp.mbga.jp` / `mbga-platform.jp` calls were captured cleanly, so the
+  important schema is complete. An iOS capture is unnecessary — same endpoints.
+* This mirrors, on the Mobage side, what the PC build reaches via AndApp
+  `idp_federation`: both terminate in a `dff.sp.mbga.jp` Sakasho session for the
+  same account. Capturing the Android user token is the no-AndApp path to it.

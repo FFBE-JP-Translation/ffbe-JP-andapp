@@ -119,6 +119,34 @@ native Mobage session. These captures are your own account against live servers
 for preservation — don't share the output; the JWTs/passphrase expire. See
 [`../docs/REVERSE_ENGINEERING.md`](../docs/REVERSE_ENGINEERING.md) §7.
 
+## `mobage_login.py`
+Reproduce the FFRK Android → Mobage/Sakasho session bootstrap **headlessly**,
+without AndApp, for your own account — the no-AndApp path decoded in
+[`../docs/REVERSE_ENGINEERING.md`](../docs/REVERSE_ENGINEERING.md) §7a. It signs
+the OAuth 1.0a HMAC-SHA1 calls and drives phases 2–4 (`_api_get_temporary_credential`
+→ `accesstoken.authorizeToken` → `_api_create_session`) to obtain an
+authenticated Sakasho game-session cookie.
+
+You supply (nothing is extracted or embedded):
+* `--consumer-secret` — the HMAC secret for `oauth_consumer_key=sdk_app_id:12019103`
+  (baked into the client's native lib; this tool does **not** pull it from any
+  binary — provide it yourself);
+* `--oauth-token` / `--oauth-token-secret` — your account's persistent access
+  token from phase 1 (capture once via the WebView login with HTTP Toolkit +
+  `frida_unpin.js`);
+* `--session-sid` — a starting `http_session_sid` for `dff.sp.mbga.jp`.
+
+```
+python mobage_login.py --selftest     # verify a consumer-secret guess vs a captured request
+python mobage_login.py --consumer-secret SECRET \
+    --oauth-token "sdk_client_id:..." --oauth-token-secret "..." \
+    --session-sid "..." --user-id 123456
+```
+`--selftest` recomputes `oauth_signature` for a request you paste and compares it
+to the observed one — the cheap way to confirm the consumer secret without
+touching a binary. Your own credentials, live servers, preservation only; don't
+share them. Requires `pip install requests`.
+
 ## manifest.json / `signature` (no tool — by design)
 `manifest.json`'s `signature[]` and the sibling `signature` file are 64-byte
 **asymmetric** signatures (ECDSA-P256/Ed25519, DeNA private key) and **cannot be
