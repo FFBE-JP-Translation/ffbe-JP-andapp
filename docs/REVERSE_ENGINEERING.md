@@ -506,14 +506,25 @@ is URL-encoded JSON:
    "oauth_token_secret":"<32-char>"}}
 ```
 plus `logged_in=1`, `user_id=<digits>`, `user_id_hash=<40-hex>`. These
-**credentials are the persistent per-user access token** — the Mobage analogue
-of AndApp's `passphrase`. (Pre-login, the same endpoint returns
-`...&please_login=1` and the `_lg` login page instead.)
+`credentials` are an **ephemeral, per-launch** OAuth access token for the
+account — the Mobage analogue of AndApp's `passphrase`, and like AndApp's JWTs
+they are *not* long-lived. Two captures of the same account (same `user_id`
+`170082138`) returned **different** `oauth_token`/`oauth_token_secret`
+(`sdk_client_id:7ea15d…`/`uYGpem…` vs `sdk_client_id:08905b…`/`Ldhn…`), so the
+SDK mints them afresh each launch. The **real persistence** is the device's
+stored Mobage-ID login (the cookies on `sp.mbga.jp` that make
+`_sdk_chk_and_auth` return `logged_in=1` without re-login); the per-launch token
+must be re-minted (reproduce `_sdk_chk_and_auth`, which needs the consumer
+secret + those cookies) or re-captured at each launch. (Pre-login, the same
+endpoint returns `...&please_login=1` and the `_lg` login page instead.)
 
 **Phase 2 — Sakasho temporary credential (`dff.sp.mbga.jp`).**
 `POST /dff/_api_get_temporary_credential` (auth by the `http_session_sid`
 cookie, `android-async-http` UA) → `{"success":true,
-"oauth_token":"temporary_credential:<40-hex>","csrf_token":"<...>"}`.
+"oauth_token":"temporary_credential:<40-hex>","csrf_token":"<...>"}`. The
+incoming `http_session_sid` here is an **unauthenticated guest** dff session
+(its response has an empty `X-GUNYA-USER-ID`); the user is not bound until
+phase 4.
 
 **Phase 3 — authorize the temp credential (`ssl.sp.mbga-platform.jp`).**
 `POST /social/api/jsonrpc/v2.03`, `{"jsonrpc":"2.0",
@@ -530,18 +541,25 @@ for login.)
 `POST /dff/_api_create_session`, form body
 `verifier=<64-hex>&oauth_token=temporary_credential:<40-hex>` → the player
 profile `{"success":true,"nickname":...,"id":"<user_id>",...}` and
-`Set-Cookie: http_session_sid=<new>` — the authenticated **game session**. The
-rest of the client (`/dff/splash`, `/dff/`, `/dff/tutorial/`) rides that cookie.
+`Set-Cookie: http_session_sid=<new>` — the **authenticated** game session (its
+response carries `X-GUNYA-USER-ID: <user_id>`). The rest of the client
+(`/dff/splash`, `/dff/`, `/dff/tutorial/`) rides that cookie.
 
 **Consequences.**
 * The whole flow is reproducible headlessly with: the **consumer secret** for
-  `sdk_app_id:12019103` (baked into the native lib — not extracted here), the
-  user's phase-1 `oauth_token`/`oauth_token_secret` (captured once via the
-  WebView login), and a starting `http_session_sid`. `tools/mobage_login.py` is
-  the signer + phase-2→4 driver skeleton for exactly this.
-* Cert pinning mostly affects the WebView login *form*; the native
-  `dff.sp.mbga.jp` / `mbga-platform.jp` calls were captured cleanly, so the
-  important schema is complete. An iOS capture is unnecessary — same endpoints.
+  `sdk_app_id:12019103` (baked into the native lib — not extracted here), a
+  fresh phase-1 `oauth_token`/`oauth_token_secret` (per-launch — re-minted via
+  `_sdk_chk_and_auth` or re-captured each session), and a starting guest
+  `http_session_sid`. `tools/mobage_login.py` is the signer + phase-2→4 driver
+  skeleton for exactly this.
+* **Cert pinning is specifically on `ssl.sp.mbga-platform.jp`** (the native
+  `nativesdk-android` social API): it is absent from a non-Frida HTTP-Toolkit
+  capture and only visible with `frida_unpin.js`. `dff.sp.mbga.jp`
+  (`android-async-http`) and the `ssl.sp.mbga.jp` WebView are *not* pinned and
+  capture cleanly either way — and a non-Frida `_api_create_session` still
+  carries the `verifier`, proving the (hidden) phase-3 call ran. So the Frida
+  capture is complete; an iOS capture is unnecessary — same endpoints.
 * This mirrors, on the Mobage side, what the PC build reaches via AndApp
   `idp_federation`: both terminate in a `dff.sp.mbga.jp` Sakasho session for the
-  same account. Capturing the Android user token is the no-AndApp path to it.
+  same account. Capturing (or re-minting) the Android user token is the
+  no-AndApp path to it.

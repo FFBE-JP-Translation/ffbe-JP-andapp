@@ -13,13 +13,17 @@ What YOU supply (none of it is extracted or embedded here):
                         `sdk_app_id:12019103`. It is baked into the client's
                         native library; this tool does NOT pull it out of any
                         binary - provide it yourself if you have it.
-  * --oauth-token / --oauth-token-secret : your account's persistent access
-                        token from phase 1 (the `credentialsInfo.credentials`
-                        in the `_sdk_chk_and_auth` session_callback). Capture it
-                        once via the real client's WebView login (HTTP Toolkit +
-                        tools/frida_unpin.js), then paste it here.
-  * --session-sid     : a starting `http_session_sid` cookie for dff.sp.mbga.jp
-                        (from the same capture) if phase 2 needs one.
+  * --oauth-token / --oauth-token-secret : the phase-1 access token
+                        (`credentialsInfo.credentials` in the `_sdk_chk_and_auth`
+                        session_callback). NOTE: this is minted FRESH each launch
+                        (ephemeral, like AndApp's ~1h JWTs), so re-capture it per
+                        session via the real client's WebView login (HTTP Toolkit
+                        + tools/frida_unpin.js), or re-mint it by reproducing
+                        `_sdk_chk_and_auth` (needs the consumer secret + the
+                        device's stored Mobage-ID cookies).
+  * --session-sid     : a starting GUEST `http_session_sid` cookie for
+                        dff.sp.mbga.jp (the one phase 2 rides before the user is
+                        bound; phase 4 issues the authenticated replacement).
 
 Use --selftest to verify a consumer-secret guess against a request you captured:
 it recomputes the oauth_signature for a request you paste and compares it to the
