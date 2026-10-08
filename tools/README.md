@@ -62,6 +62,24 @@ capture the authoritative success responses for the shared SDK commands
 (`initialize`, `get_id_token`, …) — the schema the replacement helper must match.
 Requires `pip install pycryptodome`. Ctrl-C restores the cfg.
 
+## `andapp_capture.py`
+Capture **live** AndApp credentials from the real local `AndAppHelper` and write
+them into the game-dir `andapp_loader.ini` `[helper]` section, so the loader can
+replay them for live-backend games (e.g. FFRK/Sakasho, which reject synthesized
+tokens). It connects as a client (same RSA/AES handshake), runs `initialize` /
+`get_id_token` / `get_in_app_user_id`, and extracts `access_token` / `id_token` /
+`player_id` / `andapp_user_id` / `device_account_id` / `andapp_client_version` /
+`app_id` / `passphrase`. If `andapphelper.exe` isn't running it launches
+`%LOCALAPPDATA%\AndApp\AndAppNext.exe` and waits for it.
+
+```
+python andapp_capture.py --gamedir "T:\...\Payload" \
+    --client-id 6481500049506304 --sdk-version 1.1.0-p2 --api-level 3   # FFRK
+```
+Requires `pip install pycryptodome`, the real AndApp installed, and you logged in.
+The captured JWTs are sensitive and expire (~1 h) — re-run before each session and
+don't share the ini. Windows only.
+
 ## manifest.json / `signature` (no tool — by design)
 `manifest.json`'s `signature[]` and the sibling `signature` file are 64-byte
 **asymmetric** signatures (ECDSA-P256/Ed25519, DeNA private key) and **cannot be
