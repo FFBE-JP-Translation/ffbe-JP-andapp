@@ -326,6 +326,25 @@ whether to accept them, so opaque tokens suffice client-side.
 one-instance-per-clientId guard (seen when launching a second copy). The
 replacement helper does not enforce it, so relaunching is fine.
 
+### §5b. Synthesized vs. real credentials (live-server games)
+
+The `session.id_token`/`access_token` and the `get_in_app_user_id` `passphrase`
+are **real per-user credentials** the genuine helper fetches from DeNA
+(`connect.andapp.jp` / `api.andapp.jp`) for the logged-in AndApp account. What a
+replacement can get away with depends on whose backend validates them:
+
+* **Preservation games (own server), e.g. FFBE** — the game's servers
+  (`*.exvius.com`) are redirected to your endpoint, which decides what to accept,
+  so a synthesized placeholder token/passphrase works.
+* **Live-backend games, e.g. FFRK (DeNA Sakasho)** — the game forwards the
+  `passphrase` to **live Sakasho**, which rejects a fake value with
+  `Sakasho error INVALID_PASSPHRASE` (`AndAppController.cpp`). Only the real
+  captured values for *your own account* work, and the JWTs expire (~1 h).
+  The loader accepts them via the `[helper]` `access_token` / `passphrase` /
+  `app_id` / `andapp_user_id` / `device_account_id` keys (capture with
+  `tools/andapp_mitm.py`). A synthesized helper cannot mint valid ones without
+  reimplementing the AndApp↔DeNA token flow.
+
 ### Launch error codes ("ゲームを開始できませんでした。エラーコード N")
 
 The startup dialog reports the SDK `initialize` failure. Observed:

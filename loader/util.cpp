@@ -110,6 +110,12 @@ bool load_config(const std::wstring& ini_path) {
             else if (key == "cfg_in_gamedir") g_cfg.cfg_in_gamedir = truthy(val);
             else if (key == "player_id")     g_cfg.player_id = val;
             else if (key == "id_token")      g_cfg.id_token = val;
+            else if (key == "access_token")  g_cfg.access_token = val;
+            else if (key == "passphrase")    g_cfg.passphrase = val;
+            else if (key == "app_id")        g_cfg.app_id = val;
+            else if (key == "andapp_user_id") g_cfg.andapp_user_id = val;
+            else if (key == "device_account_id") g_cfg.device_account_id = val;
+            else if (key == "andapp_client_version") g_cfg.andapp_client_version = val;
         } else if (section == "ssl") {
             if (key == "bypass") g_cfg.ssl_bypass = truthy(val);
         } else if (section == "mutex") {

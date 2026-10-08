@@ -171,7 +171,12 @@ std::string synth_id_token() {
     return "preservation.id." + config().player_id;
 }
 std::string synth_access_token() {
+    if (!config().access_token.empty()) return config().access_token;
     return "preservation.access." + config().player_id;
+}
+// Return cfg value if non-empty, else a fallback.
+std::string or_default(const std::string& v, const std::string& dflt) {
+    return v.empty() ? dflt : v;
 }
 
 // The request is {"<command>":{...params...}} - the command is the sole
@@ -210,9 +215,9 @@ std::string handle_command(const std::string& req) {
         // plus top-level andapp_client_version / andapp_user_id /
         // device_account_id / is_billing_supported.
         return reply(
-            "\"andapp_client_version\":\"4.0.4\""
-            ",\"andapp_user_id\":" + jstr(config().player_id) +
-            ",\"device_account_id\":" + jstr(config().player_id) +
+            "\"andapp_client_version\":" + jstr(config().andapp_client_version) +
+            ",\"andapp_user_id\":" + jstr(or_default(config().andapp_user_id, config().player_id)) +
+            ",\"device_account_id\":" + jstr(or_default(config().device_account_id, config().player_id)) +
             ",\"is_billing_supported\":false"
             ",\"session\":{"
                 "\"access_token\":" + jstr(synth_access_token()) +
@@ -226,10 +231,14 @@ std::string handle_command(const std::string& req) {
         return reply("\"id_token\":" + jstr(synth_id_token()));
     }
     if (action == "get_in_app_user_id") {
-        // Mirrors the id_token's links.app block.
+        // Mirrors the id_token's links.app block. For live-server games (FFRK),
+        // the passphrase + app id must be the REAL captured values or the game's
+        // backend (Sakasho) rejects them (INVALID_PASSPHRASE).
         return reply(
-            "\"createdAt\":0,\"updatedAt\":0,\"id\":" + jstr(config().player_id) +
-            ",\"extras\":{\"passphrase\":\"preservation\"}");
+            "\"createdAt\":0,\"updatedAt\":0,\"id\":" +
+            jstr(or_default(config().app_id, config().player_id)) +
+            ",\"extras\":{\"passphrase\":" +
+            jstr(or_default(config().passphrase, "preservation")) + "}");
     }
     if (action == "send_message_to_frontend") {
         // Portal/webview round-trip; ack with status 0, echo the request_id.

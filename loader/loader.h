@@ -29,6 +29,17 @@ struct Config {
     std::string player_id       = "1000000000000000";
     std::string id_token;                        // optional pre-baked token; else synthesized
 
+    // Real credential values for games that authenticate against LIVE DeNA infra
+    // (e.g. FFRK/Sakasho), captured from your own account via the MITM. When set,
+    // the helper returns them verbatim instead of synthesized placeholders.
+    // Preservation games (own redirected server) don't need these.
+    std::string access_token;                    // session.access_token
+    std::string passphrase;                      // get_in_app_user_id extras.passphrase
+    std::string app_id;                          // get_in_app_user_id id (links.app.id)
+    std::string andapp_user_id;
+    std::string device_account_id;
+    std::string andapp_client_version = "4.0.4";
+
     // SSL / cert verification bypass (runtime, in-memory)
     bool   ssl_bypass           = true;
 
