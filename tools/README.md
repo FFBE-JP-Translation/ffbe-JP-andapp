@@ -80,6 +80,45 @@ Requires `pip install pycryptodome`, the real AndApp installed, and you logged i
 The captured JWTs are sensitive and expire (~1 h) — re-run before each session and
 don't share the ini. Windows only.
 
+## Android MITM capture (`frida_unpin.js` + `mobage_capture.py`)
+Capture the **live Mobage/Sakasho login** from the FFRK JP Android client
+(`jp.mbga.a12019103`) — the OAuth handshake and the `passphrase` your account
+receives — so we can reproduce it on PC **without AndApp**. The PC build only
+*federates* an AndApp identity onto an underlying Mobage account
+(`send_message_to_frontend{operation:idp_federation}`); the Android client logs
+into that Mobage account directly, so this flow is the bypass target.
+
+Setup (device/emulator you control, your own account):
+1. **mitmproxy** on your PC: `pip install mitmproxy`, run `mitmweb` once to
+   generate the CA, then install `~/.mitmproxy/mitmproxy-ca-cert.cer` on the
+   device **as a system/trusted CA** (user-store CAs are ignored by apps on
+   Android 7+). On a rooted device/emulator push it into the system store; on a
+   non-rooted device repack the APK with the CA + `frida-gadget`.
+2. Point the device Wi-Fi proxy at `PC_IP:8080`.
+3. Defeat pinning with **Frida** (`pip install frida-tools`; `frida-server` on
+   the device, or `frida-gadget` in a repacked APK):
+   ```
+   frida -U -f jp.mbga.a12019103 -l frida_unpin.js --no-pause
+   ```
+   The script neutralizes Java (`SSLContext`/OkHttp `CertificatePinner`/
+   Conscrypt `TrustManagerImpl`/WebView), and the native BoringSSL callbacks the
+   ngCore `.so` uses — it logs which layers fired.
+4. Run the capture and launch/login in the game:
+   ```
+   mitmdump -s mobage_capture.py --set mobage_out=ffrk_android
+   ```
+   It isolates `*.mbga.jp` / `connect.mobage.jp` / Sakasho flows, writes
+   `ffrk_android_transcript.jsonl` (full annotated request/response) and
+   `ffrk_android_creds.json` (extracted `oauth_*`, `passphrase`, `player_id`,
+   session fields), and prints `*** PASSPHRASE captured ***` when it sees it.
+
+Then diff the Android sequence against what AndApp's helper hands the PC build
+(`andapp_mitm.py` output): the `passphrase` + account identity should be the
+same, which is what lets the PC loader (or a future `mobage_login.py`) replay a
+native Mobage session. These captures are your own account against live servers
+for preservation — don't share the output; the JWTs/passphrase expire. See
+[`../docs/REVERSE_ENGINEERING.md`](../docs/REVERSE_ENGINEERING.md) §7.
+
 ## manifest.json / `signature` (no tool — by design)
 `manifest.json`'s `signature[]` and the sibling `signature` file are 64-byte
 **asymmetric** signatures (ECDSA-P256/Ed25519, DeNA private key) and **cannot be

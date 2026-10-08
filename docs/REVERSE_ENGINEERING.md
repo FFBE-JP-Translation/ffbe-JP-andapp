@@ -437,3 +437,49 @@ for a direct (non-AndApp) launch.
 > the v11 `FF_EXVIUS.exe` sets them at RVA `0x00759022`. The `manifest.json`
 > sample is v11 (`versionCode 124`). `clientId 5701868182306816` there is the
 > AndApp *application* id, distinct from the SDK build id `ab6198d`.
+
+---
+
+## 7. FFRK Android — Mobage-direct login (the AndApp bypass)
+
+The PC FFRK build authenticates in two stages: the AndApp SDK/helper hands it
+real DeNA credentials (`id_token`/`access_token` JWTs + `passphrase`), then the
+game calls `send_message_to_frontend{kind:login, provider:mobage,
+operation:idp_federation}` — i.e. AndApp is an **identity provider federated
+onto an underlying Mobage account**. Everything after that (Sakasho at
+`dff.sp.mbga.jp`/`sp.mbga.jp`) is pure Mobage.
+
+**Can AndApp be bypassed?** Two different things:
+
+* **Forge** the AndApp token → **no**. `id_token`/`access_token` are JWTs signed
+  by `connect.andapp.jp` (`jku` in the header) and validated **server-side** by
+  Mobage during `idp_federation`; a synthesized value dies there, and the
+  captured real ones expire (~1 h). A replacement helper cannot mint them.
+* **Replace** the whole AndApp leg with a **native Mobage login** → **yes, in
+  principle**. The FFRK **Android** client never touches AndApp; it logs into
+  the same Mobage account directly (Mobage/ngCore OAuth 1.0a, 3-legged, via a
+  `connect.mobage.jp` login webview). That login yields the same account's
+  Sakasho session + `passphrase` the PC build ends up forwarding. So reproducing
+  the Android login removes the AndApp dependency entirely — no helper, no
+  expiring DeNA JWTs.
+
+**Why we capture rather than guess.** Three unknowns block writing the login
+blind: the Mobage **consumer key/secret** baked into the client, the exact
+**OAuth endpoints**, and whether login requires the interactive **webview**
+(username/password → `oauth_verifier`) or can be scripted. A live MITM of the
+Android client answers all three and yields a reference transcript.
+
+**Procedure** (own account, own device, live servers, preservation): mitmproxy
+with its CA trusted as a **system** CA (user-store CAs are ignored on Android
+7+), pinning defeated by `tools/frida_unpin.js` (covers Java `SSLContext`,
+OkHttp `CertificatePinner`, Conscrypt `TrustManagerImpl`, WebView SSL errors,
+and the native BoringSSL verify callbacks in the ngCore `.so`), and
+`tools/mobage_capture.py` as a mitmproxy addon to isolate the `*.mbga.jp` /
+`connect.mobage.jp` / Sakasho flows and extract `oauth_*` + `passphrase` +
+session identity. See `tools/README.md` → "Android MITM capture".
+
+**Expected outcome.** The Android transcript's `passphrase` + account identity
+should match what `andapp_mitm.py` captured from the helper on PC (§5a/§5b). If
+so, a native-Mobage login (future `tools/mobage_login.py`, fed the
+consumer key/secret + endpoints the capture reveals) can produce a Sakasho
+session for the PC build without AndApp in the loop at all.
