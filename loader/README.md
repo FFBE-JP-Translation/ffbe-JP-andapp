@@ -22,8 +22,13 @@ desktop client — no extra programs to launch. It:
    `curl_easy_setopt` to force `SSL_VERIFYPEER/HOST/STATUS`→0 and drop
    `PINNEDPUBLICKEY` / `SSL_CTX_FUNCTION`. Because libcurl is called by
    `libcocos2d.dll` (not the exe), the curl hook is applied across **all loaded
-   modules**, with a short retry to catch lazily-loaded OpenSSL/curl. Only this
-   local client process is affected.
+   modules**, with a short retry to catch lazily-loaded OpenSSL/curl. It also
+   installs a **Schannel/crypt32** chain bypass (`CertGetCertificateChain` +
+   `CertVerifyCertificateChainPolicy`) for Windows-native-TLS games (e.g. FFRK).
+   Only this local client process is affected.
+   - For **statically-linked public-key pinning** (no DLL to hook), the `[patch]`
+     ini section force-returns the pin function located by a string anchor
+     (e.g. FFRK: `sha256// = 0` → `Curl_pin_peer_pubkey` returns `CURLE_OK`).
 5. **Neutralizes the single-instance mutex** so the game launches standalone.
 6. **Relaxes the embedded Chromium (CEF)** used for login/portal/store webviews.
    CEF has its own network stack + TLS (BoringSSL), separate from libcurl/OpenSSL,

@@ -86,7 +86,8 @@ bool load_config(const std::wstring& ini_path) {
         if (t[0] == '[') { section = lower(trim(t.substr(1, t.find(']') - 1))); continue; }
         size_t eq = t.find('=');
         if (eq == std::string::npos) continue;
-        std::string key = lower(trim(t.substr(0, eq)));
+        std::string rawkey = trim(t.substr(0, eq));  // case preserved (anchors)
+        std::string key = lower(rawkey);
         std::string val = t.substr(eq + 1);
         // Strip an inline comment: a ';' or '#' preceded by whitespace. (Our
         // values never contain those chars unescaped, so this is safe.)
@@ -129,6 +130,10 @@ bool load_config(const std::wstring& ini_path) {
             else if (key == "disable_web_security")      g_cfg.cef_disable_websec = truthy(val);
             else if (key == "host_resolver_rules")       g_cfg.cef_host_rules = truthy(val);
             else if (key == "extra_switches")            g_cfg.cef_extra_switches = val;
+        } else if (section == "patch") {
+            // anchor string (case-preserved) = return value (dec or 0x hex)
+            uint32_t rv = (uint32_t)strtoul(val.c_str(), nullptr, 0);
+            g_cfg.patches.emplace_back(rawkey, rv);
         } else if (section == "dns") {
             // key = hostname, val = ipv4  (e.g. api.example.jp = 127.0.0.1)
             g_cfg.dns[lower(key)] = val;

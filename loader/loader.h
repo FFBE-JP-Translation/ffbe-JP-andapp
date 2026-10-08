@@ -61,6 +61,12 @@ struct Config {
 
     // DNS redirects: hostname (lower-case) -> IPv4 string
     std::map<std::string, std::string> dns;
+
+    // Runtime function patches: find the function in the main module that
+    // references an anchor string and force it to `return <value>`. Used to
+    // defeat static-linked cert pinning (e.g. FFRK's curl Curl_pin_peer_pubkey,
+    // anchor "sha256//", value 0 = CURLE_OK) without hand-patching the exe.
+    std::vector<std::pair<std::string, uint32_t>> patches;
 };
 
 Config& config();
@@ -88,6 +94,7 @@ void install_dns_hooks();     // getaddrinfo / GetAddrInfoW / gethostbyname
 void install_mutex_hooks();   // CreateMutexW / CreateMutexExW
 void install_ssl_bypass();    // openssl X509_verify_cert / SSL_get_verify_result / libcurl
 void install_cfg_redirect();  // CreateFileW: redirect AndAppHelper.cfg reads to game dir
+void install_anchor_patches(); // string-anchored "force return" patches (e.g. pin bypass)
 
 // Absolute path where the AndAppHelper.cfg lives (game dir if cfg_in_gamedir,
 // else %APPDATA%\AndApp\AndAppHelper.cfg). Shared by the writer and the redirect.

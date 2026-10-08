@@ -2,6 +2,7 @@
 #include "loader.h"
 #include <ws2tcpip.h>
 #include <tlhelp32.h>
+#include <wincrypt.h>
 #include <algorithm>
 #include <vector>
 #pragma comment(lib, "ws2_32.lib")
@@ -225,6 +226,71 @@ void install_cfg_redirect() {
          n, g_cfg_redirect.c_str());
 }
 
+// ================= Anchor-string function patcher ============================
+// Defeat statically-linked checks (e.g. FFRK's curl Curl_pin_peer_pubkey) at
+// runtime, with no per-version exe editing:
+//   1. find an anchor string the target function references (e.g. "sha256//"),
+//   2. find the code in .text that references that string's address,
+//   3. walk back to the function entry (the byte after MSVC's 0xCC padding),
+//   4. overwrite the entry with `mov eax, <retval>; ret` so it always returns
+//      that value (0 = CURLE_OK = "pin passes").
+// Returns the function entry, or nullptr.
+static BYTE* find_anchor_fn(HMODULE mod, const std::string& anchor) {
+    BYTE* base = (BYTE*)mod;
+    auto dos = (PIMAGE_DOS_HEADER)base;
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+    auto nt = (PIMAGE_NT_HEADERS)(base + dos->e_lfanew);
+    auto sec = IMAGE_FIRST_SECTION(nt);
+    int nsec = nt->FileHeader.NumberOfSections;
+
+    BYTE* text = nullptr; size_t textsz = 0;
+    for (int i = 0; i < nsec; i++)
+        if (memcmp(sec[i].Name, ".text", 5) == 0) {
+            text = base + sec[i].VirtualAddress;
+            textsz = sec[i].Misc.VirtualSize;
+        }
+    if (!text) return nullptr;
+
+    // Locate the anchor bytes anywhere in the image.
+    BYTE* avp = nullptr;
+    const char* a = anchor.c_str(); size_t al = anchor.size();
+    for (int i = 0; i < nsec && !avp; i++) {
+        BYTE* s = base + sec[i].VirtualAddress;
+        size_t sz = sec[i].Misc.VirtualSize;
+        for (size_t off = 0; off + al <= sz; off++)
+            if (memcmp(s + off, a, al) == 0) { avp = s + off; break; }
+    }
+    if (!avp) { logf("patch: anchor '%s' not found", anchor.c_str()); return nullptr; }
+    uint32_t target = (uint32_t)(uintptr_t)avp;
+
+    // Find a .text reference to the anchor's address, then walk back to the
+    // function entry (first byte after a run of >=2 0xCC padding bytes).
+    for (size_t off = 0; off + 4 <= textsz; off++) {
+        if (*(uint32_t*)(text + off) != target) continue;
+        BYTE* xref = text + off;
+        BYTE* limit = (xref - text > 0x4000) ? xref - 0x4000 : text;
+        for (BYTE* q = xref - 1; q > limit; q--)
+            if (q[0] == 0xCC && q[-1] == 0xCC) return q + 1;  // entry
+    }
+    logf("patch: no padding-delimited entry for anchor '%s'", anchor.c_str());
+    return nullptr;
+}
+
+void install_anchor_patches() {
+    if (config().patches.empty()) return;
+    HMODULE main = GetModuleHandleW(nullptr);
+    for (auto& p : config().patches) {
+        BYTE* fn = find_anchor_fn(main, p.first);
+        if (!fn) continue;
+        BYTE before = fn[0];
+        if (force_return(fn, p.second))
+            logf("patch: anchor '%s' -> fn %p forced return %u (was 0x%02x)",
+                 p.first.c_str(), fn, p.second, before);
+        else
+            logf("patch: failed to write at %p", fn);
+    }
+}
+
 // ================= SSL / certificate + pinning bypass ========================
 // FF_EXVIUS does HTTPS via libcurl -> OpenSSL. To accept any certificate from a
 // recreated preservation server (self-signed, hostname mismatch, and to defeat
@@ -328,8 +394,56 @@ static DWORD WINAPI ssl_late_watcher(LPVOID) {
     return 0;
 }
 
+// ---- Schannel chain/hostname bypass (crypt32) -------------------------------
+// FFRK (static curl + Schannel) validates the server cert chain via crypt32's
+// CertGetCertificateChain and checks pChainContext->TrustStatus.dwErrorStatus;
+// hostname/policy via CertVerifyCertificateChainPolicy. We post-process both to
+// report "trusted", so a self-signed / mismatched preservation cert is accepted.
+typedef BOOL (WINAPI* CertGetCertificateChain_t)(HCERTCHAINENGINE, PCCERT_CONTEXT,
+    LPFILETIME, HCERTSTORE, PCERT_CHAIN_PARA, DWORD, LPVOID, PCCERT_CHAIN_CONTEXT*);
+typedef BOOL (WINAPI* CertVerifyCertificateChainPolicy_t)(LPCSTR,
+    PCCERT_CHAIN_CONTEXT, PCERT_CHAIN_POLICY_PARA, PCERT_CHAIN_POLICY_STATUS);
+static CertGetCertificateChain_t real_CertGetCertificateChain = nullptr;
+static CertVerifyCertificateChainPolicy_t real_CertVerifyPolicy = nullptr;
+
+static BOOL WINAPI hook_CertGetCertificateChain(HCERTCHAINENGINE eng,
+    PCCERT_CONTEXT cert, LPFILETIME t, HCERTSTORE store, PCERT_CHAIN_PARA para,
+    DWORD flags, LPVOID res, PCCERT_CHAIN_CONTEXT* ppChain) {
+    BOOL ok = real_CertGetCertificateChain(eng, cert, t, store, para, flags, res, ppChain);
+    if (ok && ppChain && *ppChain) {
+        // Clear all chain error bits -> CERT_TRUST_NO_ERROR.
+        auto* c = const_cast<CERT_CHAIN_CONTEXT*>(*ppChain);
+        c->TrustStatus.dwErrorStatus = CERT_TRUST_NO_ERROR;
+        for (DWORD i = 0; i < c->cChain; i++) {
+            auto* sc = c->rgpChain[i];
+            sc->TrustStatus.dwErrorStatus = CERT_TRUST_NO_ERROR;
+            for (DWORD j = 0; j < sc->cElement; j++)
+                sc->rgpElement[j]->TrustStatus.dwErrorStatus = CERT_TRUST_NO_ERROR;
+        }
+    }
+    return ok;
+}
+
+static BOOL WINAPI hook_CertVerifyPolicy(LPCSTR oid, PCCERT_CHAIN_CONTEXT chain,
+    PCERT_CHAIN_POLICY_PARA para, PCERT_CHAIN_POLICY_STATUS status) {
+    if (real_CertVerifyPolicy) real_CertVerifyPolicy(oid, chain, para, status);
+    if (status) status->dwError = 0;   // policy satisfied (hostname/validity OK)
+    return TRUE;
+}
+
+static void install_schannel_bypass() {
+    int a = iat_hook_all_modules("crypt32.dll", "CertGetCertificateChain",
+                (void*)hook_CertGetCertificateChain,
+                (void**)&real_CertGetCertificateChain);
+    int b = iat_hook_all_modules("crypt32.dll", "CertVerifyCertificateChainPolicy",
+                (void*)hook_CertVerifyPolicy, (void**)&real_CertVerifyPolicy);
+    if (a || b)
+        logf("ssl: Schannel/crypt32 chain bypass installed (chain=%d policy=%d)", a, b);
+}
+
 void install_ssl_bypass() {
     patch_openssl_all();
+    install_schannel_bypass();
 
     static bool curl_hooked = false;
     if (!curl_hooked) {

@@ -211,6 +211,37 @@ hook is installed across every loaded module (`hooks.cpp:iat_hook_all_modules`),
 with a ~10 s retry for lazily-loaded OpenSSL/curl. See `loader/hooks.cpp`
 `install_ssl_bypass()`.
 
+### Different stacks per game (and the `[patch]` anchor patcher)
+
+The SSL bypass above targets FFBE's **dynamic OpenSSL + libcurl**. Other AndApp
+titles differ, so the bypass is per-stack:
+
+* **FFBE (Windows/AndApp)** — ships `libssl-1_1.dll` / `libcrypto-1_1.dll` /
+  `libcurl.dll`; the OpenSSL prologue patches + `curl_easy_setopt` hook cover it.
+* **FFRK (Windows)** — ships **no** OpenSSL/curl DLLs: curl is **statically
+  linked with the Schannel backend** (`secur32`/`crypt32`, `CALG_SCHANNEL_*`,
+  `schannel:` strings) and uses **public-key pinning** (`CURLOPT_PINNEDPUBLICKEY`,
+  string `"SSL public key does not match pinned public key"`). None of the
+  dynamic hooks apply. Its webview traffic is CEF/BoringSSL (covered by the CEF
+  switches); its game traffic needs the pin defeated.
+
+For the static case there's nothing to IAT-hook, so the loader uses a
+**string-anchored runtime patcher** (`[patch]` section, `install_anchor_patches`):
+it finds the function in the main module that references an anchor string, walks
+back to the entry via MSVC's `0xCC` inter-function padding, and forces it to
+`return <value>`. For FFRK, `sha256// = 0` targets `Curl_pin_peer_pubkey` (which
+references the `sha256//` pin prefix) and makes it return `CURLE_OK` — validated
+against `FFRK.exe` at entry RVA `0x19030`. This is version-robust (the anchor is a
+stable curl literal, not a byte signature) and needs no exe editing.
+
+The companion **Schannel chain/hostname bypass** is part of `install_ssl_bypass`
+(`[ssl] bypass`): it IAT-hooks crypt32 `CertGetCertificateChain` (clears
+`TrustStatus.dwErrorStatus` to `CERT_TRUST_NO_ERROR` on the returned chain, every
+sub-chain and element) and `CertVerifyCertificateChainPolicy` (forces
+`dwError = 0`, returns TRUE). Together with the `[patch]` pin bypass that makes
+FFRK's Schannel TLS accept a self-signed / mismatched preservation cert. (These
+crypt32 hooks are inert for FFBE, which verifies via OpenSSL.)
+
 ### CEF (embedded Chromium) — separate network stack
 
 The game bundles CEF (`libcef.dll`, `chrome_elf.dll`, `cef*.pak`, v8 snapshots,
