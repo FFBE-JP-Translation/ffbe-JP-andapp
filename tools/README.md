@@ -122,30 +122,33 @@ for preservation — don't share the output; the JWTs/passphrase expire. See
 ## `mobage_login.py`
 Reproduce the FFRK Android → Mobage/Sakasho session bootstrap **headlessly**,
 without AndApp, for your own account — the no-AndApp path decoded in
-[`../docs/REVERSE_ENGINEERING.md`](../docs/REVERSE_ENGINEERING.md) §7a. It signs
-the OAuth 1.0a HMAC-SHA1 calls and drives phases 2–4 (`_api_get_temporary_credential`
-→ `accesstoken.authorizeToken` → `_api_create_session`) to obtain an
-authenticated Sakasho game-session cookie.
+[`../docs/REVERSE_ENGINEERING.md`](../docs/REVERSE_ENGINEERING.md) §7a, with
+the client OAuth constants recovered in **§7b**: the consumer key/secret for
+`oauth_consumer_key=sdk_app_id:12019103` live in the APK's
+`res/values/arrays.xml` (`consumerkey_product`), **not** the native lib — the
+SP SDK signing leg is pure Java. The secret is embedded as a default
+(override with `--consumer-secret`) and is **verified** against the repo's
+packet captures by an offline oracle test.
 
-You supply (nothing is extracted or embedded):
-* `--consumer-secret` — the HMAC secret for `oauth_consumer_key=sdk_app_id:12019103`
-  (baked into the client's native lib; this tool does **not** pull it from any
-  binary — provide it yourself);
-* `--oauth-token` / `--oauth-token-secret` — your account's persistent access
-  token from phase 1 (capture once via the WebView login with HTTP Toolkit +
-  `frida_unpin.js`);
-* `--session-sid` — a starting `http_session_sid` for `dff.sp.mbga.jp`.
+What you still supply (per-user, not client constants):
+* `--mobage-cookie "NAME=VALUE"` (repeatable) — the logged-in device's
+  `sp.mbga.jp` cookie jar (`SP_SDK_*` + Mobage-ID cookies), so phase 1
+  (`_sdk_chk_and_auth`) can mint a fresh `sdk_client_id:` token pair; **or**
+* `--oauth-token` / `--oauth-token-secret` — a phase-1 token captured fresh
+  (ephemeral, per-launch);
+* `--session-sid` — a starting `http_session_sid` for `dff.sp.mbga.jp`;
+* `--user-id` — your Mobage numeric id (`xoauth_requestor_id`) unless phase 1
+  parsed it for you.
 
 ```
-python mobage_login.py --selftest     # verify a consumer-secret guess vs a captured request
-python mobage_login.py --consumer-secret SECRET \
-    --oauth-token "sdk_client_id:..." --oauth-token-secret "..." \
-    --session-sid "..." --user-id 123456
+python mobage_login.py --verify-signer   # offline: secret vs captured signatures (3 checks)
+python mobage_login.py --selftest        # interactive: check any captured request
+python mobage_login.py --mobage-cookie "SP_...=..." ... --session-sid "..."   # phases 1-4
+python mobage_login.py --oauth-token "sdk_client_id:..." --oauth-token-secret "..." \
+    --session-sid "..." --user-id 12345                                      # phases 2-4
 ```
-`--selftest` recomputes `oauth_signature` for a request you paste and compares it
-to the observed one — the cheap way to confirm the consumer secret without
-touching a binary. Your own credentials, live servers, preservation only; don't
-share them. Requires `pip install requests`.
+Your own credentials, live servers, preservation only; don't share the session
+output. Requires `pip install requests`.
 
 ## manifest.json / `signature` (no tool — by design)
 `manifest.json`'s `signature[]` and the sibling `signature` file are 64-byte

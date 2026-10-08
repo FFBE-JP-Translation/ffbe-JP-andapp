@@ -547,11 +547,13 @@ response carries `X-GUNYA-USER-ID: <user_id>`). The rest of the client
 
 **Consequences.**
 * The whole flow is reproducible headlessly with: the **consumer secret** for
-  `sdk_app_id:12019103` (baked into the native lib — not extracted here), a
-  fresh phase-1 `oauth_token`/`oauth_token_secret` (per-launch — re-minted via
-  `_sdk_chk_and_auth` or re-captured each session), and a starting guest
-  `http_session_sid`. `tools/mobage_login.py` is the signer + phase-2→4 driver
-  skeleton for exactly this.
+  `sdk_app_id:12019103` — **recovered and verified, see §7b** (it turned out to
+  sit in the APK resources, not the native lib), a fresh phase-1
+  `oauth_token`/`oauth_token_secret` (per-launch — re-minted via
+  `_sdk_chk_and_auth`, which §7b shows is now fully scriptable given the
+  device's sp.mbga.jp cookie jar, or re-captured each session), and a starting
+  guest `http_session_sid`. `tools/mobage_login.py` is the signer + phase-1→4
+  driver for exactly this.
 * **Cert pinning is specifically on `ssl.sp.mbga-platform.jp`** (the native
   `nativesdk-android` social API): it is absent from a non-Frida HTTP-Toolkit
   capture and only visible with `frida_unpin.js`. `dff.sp.mbga.jp`
@@ -563,3 +565,65 @@ response carries `X-GUNYA-USER-ID: <user_id>`). The rest of the client
   `idp_federation`: both terminate in a `dff.sp.mbga.jp` Sakasho session for the
   same account. Capturing (or re-minting) the Android user token is the
   no-AndApp path to it.
+
+### §7b. Client OAuth credentials — recovered and verified
+
+**Where they live (not the native lib).** A full string sweep of every `.so`
+in the APK (`libgame.so`, `libdeal.so`, `libnms.so`, …) finds **zero**
+`oauth`/`mobage`/`sdk_app_id`/`_sdk_chk` strings — despite the
+`nativesdk-android/1.15.0` UA, the SP SDK's signing leg is **pure Java** in
+this build (jadx packages `com.mobage.android.*`, `p204h`, `p213l`), and the
+credentials are plain **APK resources**:
+
+```
+res/values/arrays.xml
+  <array name="consumerkey_product">
+      <item>sdk_app_id:12019103</item>          <- oauth_consumer_key
+      <item>16e7347fd01e36f96454658df8e45142</item>  <- consumer secret
+  </array>
+```
+
+(`consumerkey_sandbox` and `consumerkey_twitter` are present but empty in the
+release build.)
+
+**Code path.** `com.mobage.android.sphybrid.AppConfig.init()` loads the array
+(`jadx: AppConfig.java:122-123`); `getConsumerKey()`/`getConsumerSecret()`
+return items `[0]`/`[1]` (`AppConfig.java:254-266`). The signer is the
+obfuscated `p213l/C6902h`: standard RFC 5849 — sorted URL-encoded params,
+`METHOD&url&param_string`, HMAC-SHA1 with key `consumer_secret&token_secret`,
+6-char alphanumeric nonce (matches observed `44St85`, `aCXI8z`).
+
+**Verification (offline, against our own captures).** Recomputing the
+signatures for the requests in
+`packet-captures/after_login_http_toolkit_frida.txt` reproduces them exactly:
+
+| Check | Result |
+|---|---|
+| Phase 1 `_sdk_chk_and_auth`, 2-legged (key `secret&`) | `2zypzbNCGWyISTkJ1xCB3jktVXY=` ✓ |
+| Phase 3 `accesstoken.authorizeToken`, 3-legged (key `secret&token_secret`) | `MI1BqjABHxp1H6NK6L2bkXlFGrw=` ✓ |
+| Phase 3 `oauth_body_hash` = base64(sha1(body)), compact JSON (`separators=(",",":")`, 156 B) | `E73dwWhVCXqRNB21235hgjgf+p4=` ✓ |
+
+Re-run anytime: `python tools/mobage_login.py --verify-signer` (oracle vectors
+embedded; they are expired ephemeral values from the author's own capture).
+
+**What this unlocks.** With the client constants known, every signing leg is
+reproducible headlessly:
+
+* Phase 1 (`_sdk_chk_and_auth`) needs only the consumer secret **plus the
+  device's sp.mbga.jp cookie jar** — the WebView request carries `SP_SDK_*`
+  cookies (`SP_SDK_DEVICE_ID`, `SP_SDK_TYPE`, `SP_SDK_VERSION`,
+  `SP_SDK_GAME_ID`, `SP_SDK_SIGNATURE=<base64 HMAC, presumed over the SP_SDK_*
+  set>`, …) plus the Mobage-ID login cookies that make it return
+  `logged_in=1`. `mobage_login.py` now implements phase 1 (`--mobage-cookie`
+  seeds the jar), parses the `ngcore:///session_callback#credentialsInfo`
+  fragment, and chains straight through phases 2-4.
+* Phases 2-4 were already scriptable; they now run with the embedded secret.
+* Still per-user/per-launch: the phase-1 token pair and the Mobage-ID session
+  cookies themselves (your own account's persistence) — as on §5b, those are
+  credentials, not client constants, and must come from your own device/login.
+
+**Ghidra note.** `libgame.so` (the Ghidra `ghidra_FFBE` program) holds the
+game engine + statically-linked OpenSSL; a "secret" string search there only
+finds TLS internals (`tls13_generate_secret` etc.). No Mobage OAuth material
+is native — the Ghidra project remains useful for the game API layer, but the
+auth leg is fully answered by the resources + Java above.
